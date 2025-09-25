@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>ROI Effects Editor · 马赛克 / 噪点 / 摩尔纹</title>
+<style>
+  :root{
+    --bg:#0f1220; --panel:#161a2b; --panel2:#1c2136; --text:#e7eaf4; --muted:#98a2b3; --accent:#53b1fd; --warn:#ffb020;
+    --border: #242a44;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; color:var(--text); background:linear-gradient(180deg,#0e1120 0%,#0b0f1d 100%);
+    font:14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+    height:100vh; display:flex; flex-direction:column;
+  }
+  header{
+    padding:10px 16px; border-bottom:1px solid var(--border); background:rgba(22,26,43,.9); backdrop-filter: blur(6px);
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+  }
+  header .title{font-weight:600}
+  header .hint{color:var(--muted); font-size:12px}
+  .wrap{display:grid; grid-template-columns: 360px 1fr; gap:12px; padding:12px; height:calc(100vh - 56px);}
+  .panel{
+    background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:12px; overflow:auto;
+  }
+  .panel h3{margin:6px 0 10px; font-size:14px; color:#cbd4ff}
+  .row{display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:10px}
+  label{display:flex; align-items:center; gap:6px; color:#eaefff}
+  input[type="range"]{width:160px}
+  select, input[type="number"], input[type="file"], button{
+    border-radius:8px; border:1px solid var(--border); background:var(--panel2); color:var(--text); padding:6px 10px;
+  }
+  button{cursor:pointer}
+  button.primary{background: #1b2a49; border-color:#274b8f}
+  button.ghost{background:transparent}
+  button:disabled{opacity:.5; cursor:not-allowed}
+  .stage{
+    background:var(--panel); border:1px solid var(--border); border-radius:12px; position:relative; overflow:hidden;
+    display:flex; align-items:center; justify-content:center;
+  }
+  #canvasWrap{position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center}
+  canvas{position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); image-rendering:auto;}
+  /* 确保叠放顺序正确 */
+  #main{ z-index:1; }
+  #overlay{ z-index:2; }
+  .dropzone{
+    border:1px dashed #2f3a66; padding:10px; border-radius:8px; color:var(--muted); font-size:12px
+  }
+  .badge{padding:2px 6px; border-radius:999px; background:#1e2a4a; color:#cfe1ff; border:1px solid #2b3d6e}
+  .key{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; padding:1px 6px; border-radius:6px; background:#101631; border:1px solid #2b3270; color:#b9c1ff; font-size:12px}
+  .footer{color:var(--muted); font-size:12px}
+  .sep{height:1px; background:var(--border); margin:10px 0}
+  .legend{color:var(--muted); font-size:12px}
+</style>
+</head>
+<body>
+  <header>
+    <div>
+      <div class="title">ROI Effects Editor</div>
+      <div class="hint">用鼠标画框添加 <b>马赛克 / 噪点 / 摩尔纹</b>，支持预览、橡皮擦、撤销/重做。</div>
+    </div>
+    <div class="row">
+      <label>导入图片 <input id="fileInput" type="file" accept="image/*"></label>
+      <button id="downloadBtn" class="primary" disabled>下载结果</button>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="panel" id="toolbar">
+      <h3>工作区</h3>
+      <div class="row">
+        <label>模式
+          <select id="mode">
+            <option value="rect">矩形画框</option>
+            <option value="erase">橡皮擦</option>
+          </select>
+        </label>
+        <label>效果
+          <select id="effect">
+            <option value="mosaic">马赛克</option>
+            <option value="noise">噪点</option>
+            <option value="moire">摩尔纹</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="row" id="params-mosaic">
+        <label>块大小 <input id="mosaicBlock" type="range" min="4" max="80" step="2" value="20"></label><span id="mosaicBlockVal" class="badge">20</span>
+        <label>不透明度 <input id="mosaicAlpha" type="range" min="0" max="1" step="0.05" value="1"></label><span id="mosaicAlphaVal" class="badge">1.00</span>
+      </div>
+
+      <div class="row" id="params-noise" style="display:none">
+        <label>强度 <input id="noiseAmp" type="range" min="0" max="100" step="1" value="25"></label><span id="noiseAmpVal" class="badge">25</span>
+        <label>不透明度 <input id="noiseAlpha" type="range" min="0" max="1" step="0.05" value="1"></label><span id="noiseAlphaVal" class="badge">1.00</span>
+      </div>
+
+      <div class="row" id="params-moire" style="display:none">
+        <label>频率(px/条) <input id="moireFreq" type="range" min="4" max="120" step="1" value="16"></label><span id="moireFreqVal" class="badge">16</span>
+        <label>角度(°) <input id="moireAngle" type="range" min="0" max="180" step="1" value="0"></label><span id="moireAngleVal" class="badge">0</span>
+        <label>强度 <input id="moireAmp" type="range" min="0" max="200" step="1" value="40"></label><span id="moireAmpVal" class="badge">40</span>
+        <label>不透明度 <input id="moireAlpha" type="range" min="0" max="1" step="0.05" value="0.6"></label><span id="moireAlphaVal" class="badge">0.60</span>
+      </div>
+
+      <div class="row" id="params-eraser" style="display:none">
+        <label>橡皮大小 <input id="eraserSize" type="range" min="8" max="200" step="1" value="40"></label><span id="eraserSizeVal" class="badge">40</span>
+      </div>
+
+      <div class="row">
+        <label><input id="livePreview" type="checkbox" checked> 拖动时预览</label>
+        <label>缩放
+          <select id="zoom">
+            <option value="fit">适配窗口</option>
+            <option value="1">100%</option>
+            <option value="1.5">150%</option>
+            <option value="2">200%</option>
+          </select>
+        </label>
+        <button id="undoBtn" class="ghost" disabled>撤销 <span class="key">Ctrl/⌘+Z</span></button>
+        <button id="redoBtn" class="ghost" disabled>重做 <span class="key">Ctrl/⌘+Shift+Z</span></button>
+        <button id="resetBtn" class="ghost" disabled>重置</button>
+      </div>
+
+      <div class="sep"></div>
+      <div class="dropzone legend">
+        小贴士：<br>
+        • 载入图片后，选择 <b>矩形画框</b> 模式，在画布上按下并拖拽即可选区并应用效果。<br>
+        • <b>橡皮擦</b> 模式下，拖动鼠标即可恢复到原图像素（支持多次涂抹）。<br>
+        • 若图片很大，建议切到 100%/150%/200% 检视，或使用「适配窗口」。<br>
+        • 撤销/重做分别为 <span class="key">Ctrl/⌘+Z</span>、<span class="key">Ctrl/⌘+Shift+Z</span>。
+      </div>
+    </div>
+
+    <div class="stage" id="stage">
+      <div id="canvasWrap">
+        <canvas id="main"></canvas>
+        <canvas id="overlay"></canvas>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const fileInput = document.getElementById('fileInput');
+  const downloadBtn = document.getElementById('downloadBtn');
+  const undoBtn = document.getElementById('undoBtn');
+  const redoBtn = document.getElementById('redoBtn');
+  const resetBtn = document.getElementById('resetBtn');
+
+  const modeSel = document.getElementById('mode');
+  const effectSel = document.getElementById('effect');
+  const zoomSel = document.getElementById('zoom');
+  const livePreviewChk = document.getElementById('livePreview');
+
+  // Params
+  const mosaicBlock = el('mosaicBlock'), mosaicBlockVal = el('mosaicBlockVal');
+  const mosaicAlpha = el('mosaicAlpha'), mosaicAlphaVal = el('mosaicAlphaVal');
+  const noiseAmp = el('noiseAmp'), noiseAmpVal = el('noiseAmpVal');
+  const noiseAlpha = el('noiseAlpha'), noiseAlphaVal = el('noiseAlphaVal');
+  const moireFreq = el('moireFreq'), moireFreqVal = el('moireFreqVal');
+  const moireAngle = el('moireAngle'), moireAngleVal = el('moireAngleVal');
+  const moireAmp = el('moireAmp'), moireAmpVal = el('moireAmpVal');
+  const moireAlpha = el('moireAlpha'), moireAlphaVal = el('moireAlphaVal');
+  const eraserSize = el('eraserSize'), eraserSizeVal = el('eraserSizeVal');
+
+  const paramsGroups = {
+    mosaic: el('params-mosaic'),
+    noise: el('params-noise'),
+    moire: el('params-moire'),
+    eraser: el('params-eraser'),
+  };
+
+  const main = document.getElementById('main');
+  const overlay = document.getElementById('overlay');
+  const wrap = document.getElementById('canvasWrap');
+  const stage = document.getElementById('stage');
+  const ctx = main.getContext('2d', { willReadFrequently: true });
+  const octx = overlay.getContext('2d');
+
+  // Offscreen original & temp
+  const original = document.createElement('canvas');
+  const octxOrig = original.getContext('2d');
+  const temp = document.createElement('canvas');
+  const tctx = temp.getContext('2d');
+
+  // State
+  let imgW = 0, imgH = 0;
+  let displayScale = 1; // CSS缩放比例（坐标换算用）
+  let hasImage = false;
+
+  // History
+  const undoStack = [];
+  const redoStack = [];
+  const MAX_HISTORY = 30;
+
+  // Selection / Eraser
+  let isDown = false;
+  let isErasing = false;
+  let startX = 0, startY = 0, curX = 0, curY = 0;
+  let rafId = null;
+
+  // Utils
+  function el(id){ return document.getElementById(id); }
+  function clamp(v, min, max){ return Math.max(min, Math.min(max, v)); }
+  function round(n){ return Math.round(n); }
+
+  function setEnabledUI(enabled) {
+    downloadBtn.disabled = !enabled;
+    undoBtn.disabled = undoStack.length <= 1;
+    redoBtn.disabled = redoStack.length === 0;
+    resetBtn.disabled = !enabled;
+  }
+
+  function fitToScreen() {
+    if(!hasImage) return;
+    const pad = 24; // padding
+    const availW = stage.clientWidth - pad;
+    const availH = stage.clientHeight - pad;
+    let scale = 1;
+    const zoomVal = zoomSel.value;
+    if(zoomVal === 'fit'){
+      scale = Math.min(availW / imgW, availH / imgH, 1);
+    } else {
+      scale = parseFloat(zoomVal);
+    }
+    displayScale = scale;
+
+    // ❗修复点：不要改 canvas 的 width/height（会清空内容）
+    [main, overlay].forEach(c=>{
+      c.style.width = (imgW * displayScale) + 'px';
+      c.style.height = (imgH * displayScale) + 'px';
+    });
+
+    drawOverlayCursor(); // 更新橡皮圈显示
+  }
+
+  window.addEventListener('resize', fitToScreen);
+  zoomSel.addEventListener('change', fitToScreen);
+
+  // Load image
+  fileInput.addEventListener('change', e => {
+    const file = e.target.files && e.target.files[0];
+    if(!file) return;
+    const fr = new FileReader();
+    fr.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        imgW = img.naturalWidth; imgH = img.naturalHeight;
+        hasImage = true;
+
+        // 仅在载入新图时设置一次尺寸（不会反复重置）
+        [main, overlay, original, temp].forEach(c => { c.width = imgW; c.height = imgH; });
+
+        // 绘制
+        ctx.clearRect(0,0,imgW,imgH);
+        ctx.drawImage(img, 0, 0);
+        octx.clearRect(0,0,imgW,imgH);
+
+        // 保存一份原图
+        octxOrig.clearRect(0,0,imgW,imgH);
+        octxOrig.drawImage(img, 0, 0);
+
+        pushHistory(); // 初始状态入栈
+        fitToScreen();
+        setEnabledUI(true);
+      };
+      img.src = fr.result;
+    };
+    fr.readAsDataURL(file);
+  });
+
+  // Drag & drop to stage
+  ;['dragenter','dragover'].forEach(type => stage.addEventListener(type, e => {
+    e.preventDefault(); e.stopPropagation();
+    stage.style.outline = '2px dashed #3552a4';
+  }));
+  ;['dragleave','drop'].forEach(type => stage.addEventListener(type, e => {
+    e.preventDefault(); e.stopPropagation();
+    stage.style.outline = 'none';
+  }));
+  stage.addEventListener('drop', e => {
+    const file = e.dataTransfer.files && e.dataTransfer.files[0];
+    if(file) { fileInput.files = e.dataTransfer.files; fileInput.dispatchEvent(new Event('change')); }
+  });
+
+  // Mode switching
+  function refreshParamsPanel(){
+    const mode = modeSel.value;
+    const eff = effectSel.value;
+    paramsGroups.eraser.style.display = (mode === 'erase') ? '' : 'none';
+    paramsGroups.mosaic.style.display = (mode === 'rect' && eff === 'mosaic') ? '' : 'none';
+    paramsGroups.noise.style.display  = (mode === 'rect' && eff === 'noise')  ? '' : 'none';
+    paramsGroups.moire.style.display  = (mode === 'rect' && eff === 'moire')  ? '' : 'none';
+
+    // 光标反馈
+    if(mode === 'erase'){
+      overlay.style.cursor = 'none';
+    }else{
+      overlay.style.cursor = 'crosshair';
+    }
+
+    drawOverlayCursor();
+  }
+  modeSel.addEventListener('change', refreshParamsPanel);
+  effectSel.addEventListener('change', refreshParamsPanel);
+  [mosaicBlock, mosaicAlpha, noiseAmp, noiseAlpha, moireFreq, moireAngle, moireAmp, moireAlpha, eraserSize].forEach(sl=>{
+    sl.addEventListener('input', onParamChange);
+  });
+  function onParamChange(){
+    mosaicBlockVal.textContent = mosaicBlock.value;
+    mosaicAlphaVal.textContent = (+mosaicAlpha.value).toFixed(2);
+    noiseAmpVal.textContent = noiseAmp.value;
+    noiseAlphaVal.textContent = (+noiseAlpha.value).toFixed(2);
+    moireFreqVal.textContent = moireFreq.value;
+    moireAngleVal.textContent = moireAngle.value;
+    moireAmpVal.textContent = moireAmp.value;
+    moireAlphaVal.textContent = (+moireAlpha.value).toFixed(2);
+    eraserSizeVal.textContent = eraserSize.value;
+    drawOverlayCursor();
+  }
+  onParamChange();
+
+  // History
+  function pushHistory(){
+    try {
+      const dataUrl = main.toDataURL('image/png');
+      undoStack.push(dataUrl);
+      if(undoStack.length > MAX_HISTORY) undoStack.shift();
+      redoStack.length = 0;
+      setEnabledUI(true);
+    } catch(err){
+      console.warn('pushHistory failed:', err);
+    }
+  }
+  function restoreFromDataURL(dataUrl, cb){
+    const img = new Image();
+    img.onload = () => {
+      ctx.clearRect(0,0,imgW,imgH);
+      ctx.drawImage(img, 0, 0);
+      cb && cb();
+    };
+    img.src = dataUrl;
+  }
+  undoBtn.addEventListener('click', undo);
+  redoBtn.addEventListener('click', redo);
+  resetBtn.addEventListener('click', resetAll);
+
+  function undo(){
+    if(undoStack.length <= 1) return;
+    const cur = undoStack.pop();
+    redoStack.push(cur);
+    const prev = undoStack[undoStack.length - 1];
+    restoreFromDataURL(prev, () => setEnabledUI(true));
+  }
+  function redo(){
+    if(redoStack.length === 0) return;
+    const next = redoStack.pop();
+    undoStack.push(next);
+    restoreFromDataURL(next, () => setEnabledUI(true));
+  }
+  function resetAll(){
+    if(!hasImage) return;
+    ctx.clearRect(0,0,imgW,imgH);
+    ctx.drawImage(original, 0, 0);
+    pushHistory();
+  }
+
+  // Download
+  downloadBtn.addEventListener('click', () => {
+    if(!hasImage) return;
+    const link = document.createElement('a');
+    link.download = 'edited.png';
+    link.href = main.toDataURL('image/png');
+    link.click();
+  });
+
+  // Pointer helpers
+  function getXY(evt){
+    const r = overlay.getBoundingClientRect();
+    const clientX = (evt.touches && evt.touches[0]?.clientX) ?? evt.clientX;
+    const clientY = (evt.touches && evt.touches[0]?.clientY) ?? evt.clientY;
+    const x = (clientX - r.left) / displayScale;
+    const y = (clientY - r.top) / displayScale;
+    return { x: clamp(x, 0, imgW), y: clamp(y, 0, imgH) };
+  }
+
+  // Overlay painting (selection box & eraser cursor & live preview)
+  function clearOverlay(){
+    octx.clearRect(0,0,imgW,imgH);
+  }
+  function drawSelectionRect(x,y,w,h){
+    octx.save();
+    octx.strokeStyle = 'rgba(83,177,253,1)';
+    octx.setLineDash([6,4]);
+    octx.lineWidth = 1;
+    octx.strokeRect(x + .5, y + .5, w, h);
+    octx.restore();
+  }
+  function drawOverlayCursor(x, y){
+    clearOverlay();
+    if(!hasImage) return;
+    if(modeSel.value === 'erase'){
+      octx.save();
+      octx.strokeStyle = 'rgba(255,176,32,.95)';
+      octx.lineWidth = 1;
+      octx.setLineDash([4,4]);
+      const r = +eraserSize.value;
+      if(x!=null && y!=null){
+        octx.beginPath();
+        octx.arc(x, y, r, 0, Math.PI*2);
+        octx.stroke();
+      }
+      octx.restore();
+    }
+  }
+
+  // Main pointer interactions
+  overlay.addEventListener('mousedown', onDown);
+  overlay.addEventListener('touchstart', onDown, {passive:false});
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('touchmove', onMove, {passive:false});
+  window.addEventListener('mouseup', onUp);
+  window.addEventListener('touchend', onUp);
+
+  function onDown(e){
+    if(!hasImage) return;
+    e.preventDefault();
+    const {x, y} = getXY(e);
+    isDown = true;
+    if(modeSel.value === 'erase'){
+      isErasing = true;
+      eraseAt(x,y, true);
+    } else {
+      startX = x; startY = y;
+      curX = x; curY = y;
+      if(livePreviewChk.checked) renderLivePreview();
+      else { clearOverlay(); drawSelectionRect(startX, startY, 0, 0); }
+    }
+  }
+
+  function onMove(e){
+    if(!hasImage) return;
+    const {x, y} = getXY(e);
+    if(modeSel.value === 'erase'){
+      drawOverlayCursor(x,y);
+    }
+    if(!isDown) return;
+    if(modeSel.value === 'erase'){
+      eraseAt(x, y, false);
+    } else {
+      curX = x; curY = y;
+      if(livePreviewChk.checked) {
+        renderLivePreview();
+      } else {
+        clearOverlay();
+        const {rx, ry, rw, rh} = getRect();
+        drawSelectionRect(rx, ry, rw, rh);
+      }
+    }
+  }
+
+  function onUp(e){
+    if(!hasImage || !isDown) return;
+    isDown = false;
+    if(modeSel.value === 'erase'){
+      isErasing = false;
+      pushHistory();
+      return;
+    }
+    const {rx, ry, rw, rh} = getRect();
+    clearOverlay();
+    if(rw>2 && rh>2){
+      applyEffectRect(rx, ry, rw, rh);
+      pushHistory();
+    }
+  }
+
+  function getRect(){
+    const x1 = clamp(startX, 0, imgW), y1 = clamp(startY, 0, imgH);
+    const x2 = clamp(curX, 0, imgW), y2 = clamp(curY, 0, imgH);
+    const rx = Math.min(x1,x2), ry = Math.min(y1,y2);
+    const rw = Math.abs(x2-x1), rh = Math.abs(y2-y1);
+    return {rx: round(rx), ry: round(ry), rw: round(rw), rh: round(rh)};
+  }
+
+  // Live preview rendering (to overlay)
+  function renderLivePreview(){
+    if(rafId) cancelAnimationFrame(rafId);
+    rafId = requestAnimationFrame(() => {
+      clearOverlay();
+      const {rx, ry, rw, rh} = getRect();
+      if(rw<2 || rh<2) { drawSelectionRect(rx, ry, rw, rh); return; }
+      tctx.clearRect(0,0,rw,rh);
+      tctx.drawImage(main, rx, ry, rw, rh, 0, 0, rw, rh);
+      const eff = effectSel.value;
+      if(eff === 'mosaic'){
+        const block = Math.max(2, +mosaicBlock.value|0);
+        const alpha = +mosaicAlpha.value;
+        const res = mosaicRegionToCanvas(temp, rw, rh, block);
+        octx.save();
+        octx.globalAlpha = alpha;
+        octx.drawImage(res, 0, 0, rw, rh, rx, ry, rw, rh);
+        octx.restore();
+      } else if(eff === 'noise'){
+        const amp = +noiseAmp.value|0, alpha = +noiseAlpha.value;
+        const id = tctx.getImageData(0,0,rw,rh);
+        noiseImageData(id, amp);
+        tctx.putImageData(id, 0, 0);
+        octx.save(); octx.globalAlpha = alpha; octx.drawImage(temp, 0, 0, rw, rh, rx, ry, rw, rh); octx.restore();
+      } else if(eff === 'moire'){
+        const freq = +moireFreq.value, angle = +moireAngle.value * Math.PI/180, amp = +moireAmp.value, alpha = +moireAlpha.value;
+        const id = tctx.getImageData(0,0,rw,rh);
+        moireImageData(id, freq, angle, amp);
+        tctx.putImageData(id, 0, 0);
+        octx.save(); octx.globalAlpha = alpha; octx.drawImage(temp, 0, 0, rw, rh, rx, ry, rw, rh); octx.restore();
+      }
+      drawSelectionRect(rx, ry, rw, rh);
+    });
+  }
+
+  // Apply effect to main
+  function applyEffectRect(rx, ry, rw, rh){
+    const eff = effectSel.value;
+    if(eff === 'mosaic'){
+      const block = Math.max(2, +mosaicBlock.value|0);
+      const alpha = +mosaicAlpha.value;
+      const res = mosaicRegionToCanvas(main, rw, rh, block, rx, ry);
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(res, 0, 0, rw, rh, rx, ry, rw, rh);
+      ctx.restore();
+    } else if(eff === 'noise'){
+      const amp = +noiseAmp.value|0, alpha = +noiseAlpha.value;
+      const id = ctx.getImageData(rx, ry, rw, rh);
+      noiseImageData(id, amp);
+      tctx.clearRect(0,0,rw,rh);
+      tctx.putImageData(id, 0, 0);
+      ctx.save(); ctx.globalAlpha = alpha; ctx.drawImage(temp, 0, 0, rw, rh, rx, ry, rw, rh); ctx.restore();
+    } else if(eff === 'moire'){
+      const freq = +moireFreq.value, angle = +moireAngle.value * Math.PI/180, amp = +moireAmp.value, alpha = +moireAlpha.value;
+      const id = ctx.getImageData(rx, ry, rw, rh);
+      moireImageData(id, freq, angle, amp);
+      tctx.clearRect(0,0,rw,rh);
+      tctx.putImageData(id, 0, 0);
+      ctx.save(); ctx.globalAlpha = alpha; ctx.drawImage(temp, 0, 0, rw, rh, rx, ry, rw, rh); ctx.restore();
+    }
+  }
+
+  // Effects implementations
+  function mosaicRegionToCanvas(srcCanvas, w, h, block, sx=0, sy=0){
+    const smallW = Math.max(1, Math.floor(w / block));
+    const smallH = Math.max(1, Math.floor(h / block));
+    const c1 = document.createElement('canvas'), c2 = document.createElement('canvas');
+    c1.width = w; c1.height = h;
+    c2.width = smallW; c2.height = smallH;
+    const c1x = c1.getContext('2d'), c2x = c2.getContext('2d');
+    c1x.drawImage(srcCanvas, sx, sy, w, h, 0, 0, w, h);
+    c2x.imageSmoothingEnabled = true;
+    c2x.drawImage(c1, 0, 0, w, h, 0, 0, smallW, smallH);
+    const out = document.createElement('canvas');
+    out.width = w; out.height = h;
+    const ox = out.getContext('2d');
+    ox.imageSmoothingEnabled = false;
+    ox.drawImage(c2, 0, 0, smallW, smallH, 0, 0, w, h);
+    return out;
+  }
+
+  function noiseImageData(imgData, amp){
+    const d = imgData.data;
+    for(let i=0;i<d.length;i+=4){
+      const n = (Math.random()*2 - 1) * amp;
+      d[i]   = clamp(d[i] + n, 0, 255);
+      d[i+1] = clamp(d[i+1] + n, 0, 255);
+      d[i+2] = clamp(d[i+2] + n, 0, 255);
+    }
+  }
+
+  function moireImageData(imgData, freq, angle, amp){
+    const d = imgData.data;
+    const w = imgData.width, h = imgData.height;
+    const cosT = Math.cos(angle), sinT = Math.sin(angle);
+    const twoPi = 2 * Math.PI;
+    for(let y=0; y<h; y++){
+      for(let x=0; x<w; x++){
+        const i = (y*w + x)*4;
+        const u = x*cosT + y*sinT;
+        const s = Math.sin(twoPi * (u / Math.max(1e-6, freq)));
+        const delta = s * amp;
+        d[i]   = clamp(d[i]   + delta, 0, 255);
+        d[i+1] = clamp(d[i+1] + delta, 0, 255);
+        d[i+2] = clamp(d[i+2] + delta, 0, 255);
+      }
+    }
+  }
+
+  // Eraser: clip出圆形，直接从 original 覆盖
+  function eraseAt(x,y){
+    if(!hasImage) return;
+    const r = +eraserSize.value;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI*2);
+    ctx.clip();
+    ctx.drawImage(original, 0, 0);
+    ctx.restore();
+    drawOverlayCursor(x,y);
+  }
+
+  // Keyboard shortcuts
+  window.addEventListener('keydown', (e) => {
+    if(e.key === 'z' && (e.metaKey || e.ctrlKey)){
+      e.preventDefault();
+      if(e.shiftKey) redo(); else undo();
+    }
+  });
+
+  // 初始禁用交互
+  setEnabledUI(false);
+  refreshParamsPanel(); // 初始化光标/参数面板
+
+})();
+</script>
+</body>
+</html>
